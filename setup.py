@@ -15,4 +15,6 @@ setup(
             "pywavez-remote-serial-server=pywavez.RemoteSerialDevice:main"
         ]
     },
+    test_suite="pywavez.tests",
+    setup_requires=["tox"],
 )
