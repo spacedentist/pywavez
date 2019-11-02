@@ -1,5 +1,4 @@
 import asyncio
-import functools
 import logging
 import random
 import time
@@ -35,9 +34,11 @@ class ControllerNode:
         self.noAckCountThreshold = 3
         self.wakeUpNotificationEvent = asyncio.Event()
         self.sendsWakeUpNotifications = False
-        self.initializationTask = spawnTask(
-            self.__nodeInitializationTaskImpl()
-        )
+
+        # time when to attempt initialization, None if initialization finished
+        self.attemptInitializationTime = 0
+        self.__initializationWait = 0
+
         self.commandDispatcherTask = spawnTask(
             self.__commandDispatcherTaskImpl()
         )
@@ -68,9 +69,6 @@ class ControllerNode:
         return self.__id
 
     def shutdown(self):
-        if self.initializationTask is not None:
-            self.initializationTask.cancel()
-            self.initializationTask = None
         if self.commandDispatcherTask is not None:
             self.commandDispatcherTask.cancel()
             self.commandDispatcherTask = None
@@ -99,12 +97,20 @@ class ControllerNode:
         cc = tuple(cc)
         self.commandClassCodes[endpoint] = cc
 
+        # emit NodeUpdate.CommandClass for each command class
         for i in cc:
             vers = self.commandClassVersion.get((endpoint, i))
             cc_class = self.commandClass.get((endpoint, i))
             yield NodeUpdate.CommandClass(
                 self.__id, endpoint, cc_class, i, vers
             )
+
+        if (
+            self.attemptInitializationTime is None
+            and self.__needCommandClassVersion()
+        ):
+            self.attemptInitializationTime = 0
+            self.__controller.initializationRequiredEvent.set()
 
     def handleApplicationCommandHandlerRequest(self, msg, endpoint=0):
         try:
@@ -225,8 +231,11 @@ class ControllerNode:
             self.commandQueue.add(
                 CommandTransmission(None, priority=Priority.WAKE_UP)
             )
-            self.nodeActive()
+        if self.attemptInitializationTime is not None:
+            self.attemptInitializationTime = 0
+        self.nodeActive()
         self.wakeUpNotificationEvent.set()
+        self.__controller.wakeUpNotification(self)
         return (ReceivedCommand(self.__id, endpoint, cmd),)
 
     async def __commandDispatcherTaskImpl(self):
@@ -330,46 +339,60 @@ class ControllerNode:
 
         return False
 
-    async def __nodeInitializationTaskImpl(self):
-        wait = 0
-        while self.protocolInfo is None:
-            try:
-                self.protocolInfo = await self.__controller.getNodeProtocolInfo(
-                    nodeId=self.__id
-                )
-            except Exception:
-                wait = (wait + 2) * 1.5
-                await asyncio.sleep(abs(random.gauss(wait, wait / 5)))
-            else:
-                self.__controller._receivedMessages.append(
-                    NodeUpdate.ProtocolInfo(self.__id, self.protocolInfo)
-                )
+    async def attemptInitialization(self):
+        add = 4
+        try:
+            if await self.__attemptInitializationImpl():
+                self.attemptInitializationTime = None
+                return
+        except asyncio.CancelledError:
+            self.attemptInitializationTime = time.monotonic() + 5
+        except asyncio.TimeoutError:
+            add = 2
+        except Exception:
+            traceback.print_exc()
 
-        wait = 0
-        while 0 not in self.commandClassCodes:
-            async with self.__controller._requestNodeInfoLock:
+        wait = self.__initializationWait = (
+            self.__initializationWait + add
+        ) * 1.5
+        self.attemptInitializationTime = time.monotonic() + abs(
+            random.gauss(wait, wait / 5)
+        )
+
+    async def __attemptInitializationImpl(self):
+        logging.info(f"Attempt initialization: { self.id }")
+
+        if self.protocolInfo is None:
+            self.protocolInfo = await asyncio.wait_for(
+                self.__controller.getNodeProtocolInfo(nodeId=self.__id),
+                timeout=5,
+            )
+            self.__controller._receivedMessages.append(
+                NodeUpdate.ProtocolInfo(self.__id, self.protocolInfo)
+            )
+            self.__initializationWait = 0
+
+        if 0 not in self.commandClassCodes:
+            # We don't know the command classes for endpoint 0 yet
+            while 0 not in self.commandClassCodes:
                 self.nodeActiveEvent.clear()
                 try:
-                    await self.__controller.requestNodeInfo(nodeId=self.__id)
+                    await asyncio.wait_for(
+                        self.__controller.requestNodeInfo(nodeId=self.__id),
+                        timeout=5,
+                    )
+                except asyncio.CancelledError:
+                    raise
                 except Exception:
                     ...
-                await waitForOne(self.nodeActiveEvent.wait(), timeout=2)
-            wait = (wait + 4) * 1.5
-            await waitForOne(
-                self.nodeActiveEvent.wait(),
-                timeout=abs(random.gauss(wait, wait / 5)),
-            )
+                await asyncio.wait_for(self.nodeActiveEvent.wait(), timeout=2)
+            self.__initializationWait = 0
 
-        self.__ongoing_tasks = set()
-        self.__task_repetition_count = {}
         CommandClassVersionV1 = getCommandClassVersion(CommandClass.VERSION, 1)
+        # self.__initializationWait += 5
 
         while True:
-            if self.sendsWakeUpNotifications:
-                await self.wakeUpNotificationEvent.wait()
-                await asyncio.sleep(abs(random.gauss(0.05, 0.01)))
-            else:
-                await asyncio.sleep(abs(random.gauss(5, 1)))
+            init_tasks = []
 
             # Get command class versions for all endpoints we know the
             # supported command classes of
@@ -383,27 +406,26 @@ class ControllerNode:
                     if endpoint != 0
                     else self.__initCCVersionPriority.get(cc, 0)
                 )
-                self.__addInitTask(
+                self.__addInitTaskTo(
+                    init_tasks,
                     f"getCommandClassVersion-{ endpoint }-{ cc }",
-                    functools.partial(
-                        lambda x: x not in self.commandClassVersion,
-                        (endpoint, cc),
-                    ),
-                    functools.partial(
-                        lambda endpoint, cc, priority: self.sendCommand(
+                    (
+                        lambda endpoint, cc: lambda: (endpoint, cc)
+                        not in self.commandClassVersion
+                    )(endpoint, cc),
+                    (
+                        lambda endpoint, cc: lambda: self.sendCommand(
                             CommandClassVersionV1.CommandClassGet(
                                 requestedCommandClass=cc
                             ),
                             endpoint=endpoint,
-                            priority=priority,
-                        ),
-                        endpoint,
-                        cc,
-                        priority + Priority.INITALIZATION,
-                    ),
+                            priority=priority + Priority.INITALIZATION,
+                        )
+                    )(endpoint, cc),
                 )
 
-            self.__addInitTask(
+            self.__addInitTaskTo(
+                init_tasks,
                 "getMultiChannelEndpoints",
                 lambda: self.endPointReport is None
                 and hasattr(
@@ -416,8 +438,8 @@ class ControllerNode:
                     ].EndPointGet()
                 ),
             )
-
-            self.__addInitTask(
+            self.__addInitTaskTo(
+                init_tasks,
                 "getManufacturerInfo",
                 lambda: self.manufacturerInfo is None
                 and hasattr(
@@ -437,31 +459,29 @@ class ControllerNode:
                 for ep in range(
                     1, self.endPointReport.individualEndPoints + 1
                 ):
-                    self.__addInitTask(
+                    self.__addInitTaskTo(
+                        init_tasks,
                         f"getMultiChannelEndpointCapabilities-{ ep }",
-                        functools.partial(
-                            lambda ep: ep
+                        (
+                            lambda ep: lambda: ep
                             <= self.endPointReport.individualEndPoints
-                            and ep not in self.commandClassCodes,
-                            ep,
-                        ),
-                        functools.partial(
-                            lambda ep: self.sendCommand(
+                            and ep not in self.commandClassCodes
+                        )(ep),
+                        (
+                            lambda ep: lambda: self.sendCommand(
                                 self.commandClass[
                                     0, CommandClass.MULTI_CHANNEL
                                 ].CapabilityGet(endPoint=ep)
-                            ),
-                            ep,
-                        ),
+                            )
+                        )(ep),
                     )
 
-            if not self.__ongoing_tasks:
-                sleep_time = abs(random.gauss(1800, 360))
-                logging.info(
-                    f"Node initialization task: node #{ self.__id } - "
-                    f"sleeping for { sleep_time } seconds"
-                )
-                await asyncio.sleep(sleep_time)
+            if not init_tasks:
+                return True
+            random.shuffle(init_tasks)
+            for t in init_tasks:
+                if not await t.run():
+                    return False
 
     __initCCVersionPriority = {
         CommandClass.MANUFACTURER_SPECIFIC: 2,
@@ -470,33 +490,55 @@ class ControllerNode:
         CommandClass.WAKE_UP: -1,
     }
 
-    def __addInitTask(self, key, condition, action):
-        if key in self.__ongoing_tasks:
-            return
+    def __needCommandClassVersion(self):
+        return any(
+            (endpoint, cc) not in self.commandClassVersion
+            for endpoint, cc_codes in self.commandClassCodes.items()
+            for cc in cc_codes
+        )
+
+    def __addInitTaskTo(self, list, key, condition, action):
+        t = InitTask(self, key, condition, action)
+        if t.check_condition():
+            list.append(t)
+
+
+class InitTask:
+    def __init__(self, node, key, condition, action):
+        self.node = node
+        self.key = key
+        self.condition = condition
+        self.action = action
+
+    def check_condition(self):
         try:
-            condition = bool(condition())
+            return self.condition()
+        except asyncio.CancelledError:
+            raise
         except Exception:
-            condition = False
-        if condition:
-            count = self.__task_repetition_count.get(key, 0)
-            self.__task_repetition_count[key] = count + 1
-            self.__ongoing_tasks.add(key)
-        else:
-            self.__task_repetition_count.pop(key, None)
-            return
+            return True
 
-        async def execute_action():
+    async def run(self):
+        if not self.check_condition():
+            return True
+
+        logging.debug(f"Run init task { self.key !r} (node { self.node.id })")
+        await asyncio.wait_for(self.action(), timeout=5)
+
+        timeout = time.monotonic() + 2
+
+        while True:
+            if not self.check_condition():
+                return True
+            if time.monotonic() >= timeout:
+                return False
+            self.node.nodeActiveEvent.clear()
             try:
-                try:
-                    await action()
-                except asyncio.CancelledError:
-                    return
-                except Exception:
-                    traceback.print_exc()
-                delay = 3 * abs(random.gauss(1, 0.2)) * (1.2 ** count)
-                await asyncio.sleep(delay)
-            finally:
-                self.__ongoing_tasks.discard(key)
-
-        logging.info(f"Adding init task { key !r} to node { self.__id }")
-        asyncio.create_task(execute_action())
+                await asyncio.wait_for(
+                    self.node.nodeActiveEvent.wait(),
+                    timeout=timeout - time.monotonic(),
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                ...

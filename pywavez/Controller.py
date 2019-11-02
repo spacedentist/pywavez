@@ -98,6 +98,8 @@ class Controller:
         self.__sp = sp
         self.__mq = MessageQueue()
         self.__node = [None] * 233
+        self.__initializationNodeQueue = []
+        self.initializationRequiredEvent = asyncio.Event()
         self.__responseHandler = {
             MessageClass.SERIAL_API_GET_INIT_DATA: self.__handleSerialApiGetInitDataResponse
         }
@@ -107,7 +109,6 @@ class Controller:
             MessageClass.SEND_DATA: self.__handleSendDataRequest,
         }
         self._funcIdManager = FuncIdManager()
-        self._requestNodeInfoLock = asyncio.Lock()
 
         self._receivedMessages = SimpleQueue()
         self.hasMessage = self._receivedMessages.hasMessage
@@ -115,6 +116,9 @@ class Controller:
         self.takeMessage = self._receivedMessages.takeMessage
 
         self.__task = spawnTask(self.__taskImpl())
+        self.__nodeInitializationTask = spawnTask(
+            self.__nodeInitializationTaskImpl()
+        )
 
         cap = await self.__sendMessage(
             outboundMessageClass(
@@ -174,7 +178,9 @@ class Controller:
         if self.__node[id] is not None:
             logging.warning(f"Tried to add already existing node { id }")
             return
-        self.__node[id] = ControllerNode(id, self)
+        node = self.__node[id] = ControllerNode(id, self)
+        self.__initializationNodeQueue.append(node)
+        self.initializationRequiredEvent.set()
 
     async def shutdown(self):
         self.__task.cancel()
@@ -379,6 +385,106 @@ class Controller:
             # yield from node.handleApplicationCommandHandlerRequest(msg)
             for x in node.handleApplicationCommandHandlerRequest(msg):
                 yield x
+
+    async def __nodeInitializationTaskImpl(self):
+        while True:
+            while not self.__initializationNodeQueue:
+                logging.info("No nodes require initialization")
+                self.initializationRequiredEvent.clear()
+                await self.initializationRequiredEvent.wait()
+
+            # Remove nodes from the queue that have finished initialization
+            idx = 0
+            while idx < len(self.__initializationNodeQueue):
+                if (
+                    self.__initializationNodeQueue[
+                        idx
+                    ].attemptInitializationTime
+                    is None
+                ):
+                    self.__initializationNodeQueue.pop(idx)
+                else:
+                    idx += 1
+            if not self.__initializationNodeQueue:
+                continue
+
+            if not self.__initializationNodeQueue:
+                continue
+            else:
+                logging.info(
+                    "Number of nodes requiring initialization: "
+                    f"{ len(self.__initializationNodeQueue) }"
+                )
+
+            node = None
+            now = time.monotonic()
+            earliest = None
+
+            # Is there a node that sends wake-up notifications that is awake?
+            for idx, n in enumerate(self.__initializationNodeQueue):
+                if (
+                    n.sendsWakeUpNotifications
+                    and n.wakeUpNotificationEvent.is_set()
+                ):
+                    if n.attemptInitializationTime <= now:
+                        # ready to attempt initialization
+                        node = self.__initializationNodeQueue.pop(idx)
+                        self.__initializationNodeQueue.append(node)
+                        break
+                    elif (
+                        earliest is None
+                        or earliest > n.attemptInitializationTime
+                    ):
+                        # not ready, but we want to wake up when it becomes
+                        # ready
+                        earliest = n.attemptInitializationTime
+
+            if node is None:
+                # Any other node ready to attempt initialization?
+                for idx, n in enumerate(self.__initializationNodeQueue):
+                    if not n.sendsWakeUpNotifications:
+                        if n.attemptInitializationTime <= now:
+                            # ready to attempt initialization
+                            node = self.__initializationNodeQueue.pop(idx)
+                            self.__initializationNodeQueue.append(node)
+                            break
+                        elif (
+                            earliest is None
+                            or earliest > n.attemptInitializationTime
+                        ):
+                            # not ready, but we want to wake up when it becomes
+                            # ready
+                            earliest = n.attemptInitializationTime
+
+            if node is None:
+                # There is no node awaiting initialization right now.
+                if earliest is not None:
+                    self.initializationRequiredEvent.clear()
+                    await waitForOne(
+                        self.initializationRequiredEvent.wait(),
+                        timeout=earliest - now + 0.05,
+                    )
+                continue
+
+            if node.sendsWakeUpNotifications:
+                # This node sends wake-up notifications, so initialization
+                # can only happen while it is awake. We believe it to be awake
+                # now. Attempt initialization without interruptions.
+                await node.attemptInitialization()
+            else:
+                # As far as we know, this node can be initialized at any time.
+                # Interrupt if another node that needs initialisation sends
+                # a wake-up notification.
+                node_wakeup = [
+                    n.wakeUpNotificationEvent.wait()
+                    for n in self.__initializationNodeQueue
+                    if n is not node
+                ]
+                await waitForOne(node.attemptInitialization(), *node_wakeup)
+
+    def wakeUpNotification(self, node):
+        if node.attemptInitializationTime is not None:
+            self.initializationRequiredEvent.set()
 
     @property
     def homeId(self):
