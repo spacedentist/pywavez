@@ -1,4 +1,5 @@
 import asyncio
+import typing
 import re
 
 
@@ -63,7 +64,7 @@ class SerialDeviceBase:
                 raise StopIteration
 
 
-def makeSerialDevice(dev):
+def makeSerialDevice(dev) -> typing.Awaitable[SerialDeviceBase]:
     match = re.match(r"^([\w\-\.:]+):(\d+)$", dev)
     if match:
         host, port = match.groups()

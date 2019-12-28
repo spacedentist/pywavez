@@ -5,6 +5,7 @@ import functools
 import logging
 import time
 import traceback
+import typing
 
 from asyncinit import asyncinit
 
@@ -12,6 +13,8 @@ from pywavez.zwave import outboundMessageClass, inboundMessageFromBytes
 from pywavez.zwave.Constants import LibraryType, MessageClass, MessageType
 from pywavez.util import toCamelCase, waitForOne, spawnTask
 from pywavez.ControllerNode import ControllerNode
+from pywavez.SerialDeviceBase import SerialDeviceBase, makeSerialDevice
+from pywavez.SerialProtocol import SerialProtocol
 from pywavez.Transmission import (
     Priority,
     MessageTransmission,
@@ -94,8 +97,18 @@ class FuncIdManager:
 
 @asyncinit
 class Controller:
-    async def __init__(self, sp):
-        self.__sp = sp
+    async def __init__(
+        self,
+        serial_protocol: typing.Union[SerialProtocol, SerialDeviceBase, str],
+    ):
+        if not isinstance(serial_protocol, SerialProtocol):
+            if isinstance(serial_protocol, SerialDeviceBase):
+                serial_protocol = SerialProtocol(serial_protocol)
+            else:
+                serial_protocol = SerialProtocol(
+                    await makeSerialDevice(serial_protocol)
+                )
+        self.__sp = serial_protocol
         self.__mq = MessageQueue()
         self.__node = [None] * 233
         self.__initializationNodeQueue = []

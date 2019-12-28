@@ -10,7 +10,7 @@ import logging
 import time
 import typing
 
-from .SerialDevice import SerialDevice
+from .SerialDeviceBase import SerialDeviceBase
 from .util import waitForOne, spawnTask
 
 
@@ -42,7 +42,7 @@ def frameMessage(payload: typing.ByteString) -> bytearray:
 
 
 class SerialProtocol:
-    def __init__(self, device: SerialDevice) -> None:
+    def __init__(self, device: SerialDeviceBase) -> None:
         self.__dev = device
         self.__receivedMsgs = []
         self.__readerFinished = False
