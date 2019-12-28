@@ -234,7 +234,8 @@ class Controller:
                             logging.warning(
                                 f"Response handler raised exception: { ex !r}"
                             )
-                    msgtx.set_result(msg)
+                    if not msgtx.cancelled():
+                        msgtx.set_result(msg)
                     msgtx = None
                     tx_timeout = None
                     continue
