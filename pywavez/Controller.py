@@ -114,11 +114,17 @@ class Controller:
         self.__initializationNodeQueue = []
         self.initializationRequiredEvent = asyncio.Event()
         self.__responseHandler = {
-            MessageClass.SERIAL_API_GET_INIT_DATA: self.__handleSerialApiGetInitDataResponse
+            MessageClass.SERIAL_API_GET_INIT_DATA: (
+                self.__handleSerialApiGetInitDataResponse
+            )
         }
         self.__incomingRequestHandler = {
-            MessageClass.APPLICATION_UPDATE: self.__handleApplicationUpdateRequest,
-            MessageClass.APPLICATION_COMMAND_HANDLER: self.__handleApplicationCommandHandlerRequest,
+            MessageClass.APPLICATION_UPDATE: (
+                self.__handleApplicationUpdateRequest
+            ),
+            MessageClass.APPLICATION_COMMAND_HANDLER: (
+                self.__handleApplicationCommandHandlerRequest
+            ),
             MessageClass.SEND_DATA: self.__handleSendDataRequest,
         }
         self._funcIdManager = FuncIdManager()

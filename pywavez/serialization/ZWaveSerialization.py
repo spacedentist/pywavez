@@ -52,9 +52,9 @@ class ZWaveSerialization(Serialization):
 
         def writer(value, ba, pos, eval):
             val = value + bytes((_marker,))
-            l = len(val)
-            ba[pos : pos + l] = val
-            return ba, pos + l
+            length = len(val)
+            ba[pos : pos + length] = val
+            return ba, pos + length
 
         return reader, writer, str
 
@@ -64,4 +64,4 @@ class ZWaveCommandClassBase:
 
 
 # resolve forward references in type hints above
-from pywavez.zwave.Constants import MessageType, MessageClass
+from pywavez.zwave.Constants import MessageType, MessageClass  # noqa: E402

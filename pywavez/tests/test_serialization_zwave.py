@@ -15,7 +15,9 @@ class TestGetVersion(unittest.TestCase):
 
     def test_SerialApiGetCapabilitiesResponse(self):
         data = bytes.fromhex(
-            "0107aabb12345678abcd0002082080000200000000000000000000000000000000000000000000000000"
+            "0107aabb12345678abcd00020820800002000000"
+            "0000000000000000000000000000000000000000"
+            "0000"
         )
         obj = inboundMessageFromBytes(data)
         self.assertEqual(type(obj), Message.SerialApiGetCapabilitiesResponse)
@@ -29,7 +31,8 @@ class TestGetVersion(unittest.TestCase):
 
     def test_SerialApiGetInitDataResponse(self):
         data = bytes.fromhex(
-            "010205001dadff3f00000000000000000000000000000000000000000000000000000500"
+            "010205001dadff3f000000000000000000000000"
+            "00000000000000000000000000000500"
         )
         obj = inboundMessageFromBytes(data)
         self.assertEqual(type(obj), Message.SerialApiGetInitDataResponse)

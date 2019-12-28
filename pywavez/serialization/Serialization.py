@@ -151,18 +151,18 @@ class Serialization:
 
     @staticmethod
     def _func_magic(attributes, *, _bytes: typing.ByteString):
-        l = len(_bytes)
+        length = len(_bytes)
 
         def reader(ba, pos, eval):
-            if len(ba) < pos + l:
+            if len(ba) < pos + length:
                 raise Exception("short message")
-            if ba[pos : pos + l] != _bytes:
+            if ba[pos : pos + length] != _bytes:
                 raise Exception("magic mismatch")
-            return pos + l, None
+            return pos + length, None
 
         def writer(value, ba, pos, eval):
             ba[pos:] = _bytes
-            return ba, pos + l
+            return ba, pos + length
 
         return reader, writer, None
 
@@ -188,9 +188,9 @@ class Serialization:
 
         def writer(value, ba, pos, eval):
             val = value.encode(_encoding) + b"\x00"
-            l = len(val)
-            ba[pos : pos + l] = val
-            return ba, pos + l
+            length = len(val)
+            ba[pos : pos + length] = val
+            return ba, pos + length
 
         return reader, writer, str
 
@@ -272,47 +272,47 @@ class Serialization:
 
         def reader(ba, pos, eval):
             if _bytes is None:
-                l = len(ba) - pos
+                length = len(ba) - pos
             else:
-                l = eval(_bytes)
+                length = eval(_bytes)
             res = set()
 
-            for idx in range(l):
+            for idx in range(length):
                 for bit in range(8):
                     if ba[pos + idx] & (1 << bit):
                         res.add(conv(idx * 8 + bit + _offset))
 
-            return pos + l, res
+            return pos + length, res
 
         def writer(value, ba, pos, eval):
             if _bytes is None:
-                l = (max(value) - _offset) // 8 + 1
+                length = (max(value) - _offset) // 8 + 1
             else:
-                l = eval(_bytes)
+                length = eval(_bytes)
 
-            ba[pos : pos + l] = setbits(
-                bytearray(l), map(convback, value), _offset
+            ba[pos : pos + length] = setbits(
+                bytearray(length), map(convback, value), _offset
             )
 
-            return ba, pos + l
+            return ba, pos + length
 
         return reader, writer, typing.Set[elementtype]
 
     def _func_binary(self, attributes, *, _bytes=None):
         def reader(ba, pos, eval):
             if _bytes is None:
-                l = len(ba) - pos
+                length = len(ba) - pos
             else:
-                l = eval(_bytes)
-            return pos + l, ba[pos : pos + l]
+                length = eval(_bytes)
+            return pos + length, ba[pos : pos + length]
 
         def writer(value, ba, pos, eval):
             if _bytes is None:
-                l = len(value)
+                length = len(value)
             else:
-                l = eval(_bytes)
-            ba[pos : pos + l] = value
-            return ba, pos + l
+                length = eval(_bytes)
+            ba[pos : pos + length] = value
+            return ba, pos + length
 
         return reader, writer, typing.ByteString
 
@@ -356,21 +356,21 @@ class Serialization:
         itemrdr, itemwtr, itemtype = self._getItemFunction(_items, attributes)
 
         def reader(ba, pos, eval):
-            l = eval(_length)
+            length = eval(_length)
             res = []
-            if l is None:
+            if length is None:
                 while pos < len(ba):
                     pos, value = itemrdr(ba, pos, eval)
                     res.append(value)
             else:
-                for i in range(l):
+                for i in range(length):
                     pos, value = itemrdr(ba, pos, eval)
                     res.append(value)
             return pos, res
 
         def writer(value, ba, pos, eval):
-            l = eval(_length)
-            if l is not None and len(value) != l:
+            length = eval(_length)
+            if length is not None and len(value) != length:
                 raise Exception("array length mismatch")
             for i in value:
                 ba, pos = itemwtr(i, ba, pos, eval)
@@ -392,9 +392,9 @@ class Serialization:
             if not isinstance(value, t):
                 raise Exception(f"object does not match type { t !r}")
             value = value.toBytes()
-            l = len(value)
-            ba[pos : pos + l] = value
-            return ba, pos + l
+            length = len(value)
+            ba[pos : pos + length] = value
+            return ba, pos + length
 
         return reader, writer, None
 
@@ -523,8 +523,8 @@ def sint2bytes(v: int, b: int) -> bytearray:
 
 
 def setbits(ba, bits, offset):
-    l = len(ba)
-    high = l * 8
+    length = len(ba)
+    high = length * 8
 
     for b in bits:
         v = b - offset
