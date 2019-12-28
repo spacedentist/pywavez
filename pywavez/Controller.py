@@ -302,6 +302,7 @@ class Controller:
                 msgtx.transmitting = False
                 self.__mq.add(msgtx)
                 msgtx = None
+                tx_timeout = None
 
     def __sendMessage(self, message, **kwargs):
         msgtx = MessageTransmission(message, **kwargs)
