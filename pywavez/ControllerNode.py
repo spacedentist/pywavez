@@ -285,7 +285,8 @@ class ControllerNode:
             command = command.toBytes()
 
             if await self.__transmitCommand(command):
-                cmdtx.set_result(None)
+                if not cmdtx.cancelled():
+                    cmdtx.set_result(None)
             else:
                 cmdtx.retransmission += 1
                 cmdtx.pauseUntil = time.monotonic() + 5

@@ -62,12 +62,11 @@ class SimpleQueue:
 
     async def waitForMessage(self):
         while not self.__messages:
+            self.__event.clear()
             await self.__event.wait()
 
     def takeMessage(self):
         message = self.__messages.popleft()
-        if not self.__messages:
-            self.__event.clear()
         return message
 
     async def getMessage(self):
