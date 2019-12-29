@@ -1,10 +1,23 @@
 from setuptools import setup
 
+with open("README.rst", "r") as fh:
+    long_description = fh.read()
+
+with open("pywavez/__version__.py", "r") as fh:
+    versiondict = {"__builtins__": {}}
+    exec(fh.read(), versiondict)
+    version = versiondict["version"]
+
 setup(
     name="pywavez",
-    version="0.1",
+    version=version,
     description="Native Python implementation of the ZWave protocol",
-    url="https://github.com/spacedentist/pyimmutable",
+    long_description=long_description,
+    long_description_content_type="text/x-rst",
+    url="https://github.com/spacedentist/pywavez",
+    download_url=(
+        f"https://github.com/spacedentist/pywavez/archive/{ version }.tar.gz"
+    ),
     author="Sven Over",
     author_email="sp@cedenti.st",
     license="MIT",
